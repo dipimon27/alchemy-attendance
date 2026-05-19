@@ -144,6 +144,52 @@ def get_players_for_month(venue, month_start, month_end, include_inactive=False)
                 leaving_date
             FROM players
             WHERE venue = ?
+              AND date(joining_date) <= date(?)
+              AND (
+                    leaving_date IS NULL
+                    OR date(leaving_date) >= date(?)
+              )
+            ORDER BY status, player_name
+        """
+        params = (venue, month_end.isoformat(), month_start.isoformat())
+    else:
+        query = """
+            SELECT
+                id,
+                player_name,
+                dob,
+                venue,
+                status,
+                joining_date,
+                leaving_date
+            FROM players
+            WHERE venue = ?
+              AND status = 'Active'
+              AND date(joining_date) <= date(?)
+              AND (
+                    leaving_date IS NULL
+                    OR date(leaving_date) >= date(?)
+              )
+            ORDER BY status, player_name
+        """
+        params = (venue, month_end.isoformat(), month_start.isoformat())
+
+    players = conn.execute(query, params).fetchall()
+    conn.close()
+    return players
+
+    if include_inactive:
+        query = """
+            SELECT
+                id,
+                player_name,
+                dob,
+                venue,
+                status,
+                joining_date,
+                leaving_date
+            FROM players
+            WHERE venue = ?
             ORDER BY status, player_name
         """
         params = (venue,)

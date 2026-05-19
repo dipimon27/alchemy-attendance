@@ -6,6 +6,8 @@ import database as db
 
 from datetime import date, timedelta, datetime
 
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode, JsCode
+
 st.set_page_config(
     page_title="Alchemy Football Academy",
     layout="wide"
@@ -180,6 +182,11 @@ def calculate_age(dob):
     return years
 
 
+def format_date_display(value):
+    d = to_date_value(value)
+    return d.strftime("%d-%m-%Y") if d else ""
+
+
 def render_metric_card(label, value, sublabel=None):
     st.markdown(
         f"""
@@ -199,12 +206,7 @@ def render_metric_card(label, value, sublabel=None):
     )
 
 
-def get_summary_period(year_start):
-    options = get_season_month_options(year_start)
-    return options
-
-
-def build_register_dataframe(register_venue, register_year, register_month, autopopulate_previous=False):
+def build_register_dataframe(register_venue, register_year, register_month, blank_rows=5, autopopulate_previous=False):
     register_month_start, register_month_end = month_range(register_year, register_month)
     class_dates = get_class_dates_for_month(register_venue, register_year, register_month)
 
@@ -215,18 +217,16 @@ def build_register_dataframe(register_venue, register_year, register_month, auto
         include_inactive=False
     )
 
+    previous_players = []
     if autopopulate_previous:
         prev_year, prev_month = previous_month(register_year, register_month)
         prev_start, prev_end = month_range(prev_year, prev_month)
-
         previous_players = db.get_players_for_month(
             register_venue,
             prev_start,
             prev_end,
             include_inactive=True
         )
-    else:
-        previous_players = []
 
     attendance_records_month = db.get_attendance_for_venue_month(
         register_venue,
@@ -255,13 +255,13 @@ def build_register_dataframe(register_venue, register_year, register_month, auto
         rows_by_id[player_id] = {
             "__player_id": player_id,
             "Delete Permanently": False,
-            "Date Joined": joining_date,
+            "Date Joined": format_date_display(joining_date),
             "Name": player_name,
-            "Date of Birth": dob,
+            "Date of Birth": format_date_display(dob),
             "Current Age": calculate_age(dob),
             "Venue": venue,
             "Status": status,
-            "Leaving Date": leaving_date
+            "Leaving Date": format_date_display(leaving_date)
         }
 
     for player in current_players:
@@ -274,8 +274,24 @@ def build_register_dataframe(register_venue, register_year, register_month, auto
 
     editable_rows = list(rows_by_id.values())
 
+    for _ in range(blank_rows):
+        editable_rows.append({
+            "__player_id": None,
+            "Delete Permanently": False,
+            "Date Joined": register_month_start.strftime("%d-%m-%Y"),
+            "Name": "",
+            "Date of Birth": "",
+            "Current Age": None,
+            "Venue": register_venue,
+            "Status": "Active",
+            "Leaving Date": ""
+        })
+
     for row in editable_rows:
         player_id = row["__player_id"]
+        if player_id is None:
+            continue
+
         for class_item in class_dates:
             class_col = f"🟦 Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
             row[class_col] = attendance_map.get(
@@ -356,13 +372,12 @@ with tabs[0]:
         )
 
     active_players_count = db.get_active_player_count_as_of(summary_period_end)
-
     attendance_records = db.get_attendance_records_between(summary_period_start, summary_period_end)
 
     present_count = 0
     absent_count = 0
-
     selected_months_set = set(selected_summary_months)
+
     for rec in attendance_records:
         class_date = to_date_value(rec[2])
         if class_date is None:
@@ -469,17 +484,26 @@ with tabs[1]:
             f"Use ✓ for present and ✕ for absent. Schedule: {venue_schedule['display']}"
         )
 
-    current_key = f"autopopulate_{register_venue}_{register_year}_{register_month}"
-    autopopulate_previous = st.session_state.get(current_key, False)
+    blank_rows_key = f"blank_rows_{register_venue}_{register_year}_{register_month}"
+    autopopulate_key = f"autopopulate_{register_venue}_{register_year}_{register_month}"
+
+    if blank_rows_key not in st.session_state:
+        st.session_state[blank_rows_key] = 5
+
+    autopopulate_previous = st.session_state.get(autopopulate_key, False)
 
     register_df, class_dates, register_month_start, register_month_end = build_register_dataframe(
         register_venue,
         register_year,
         register_month,
+        blank_rows=st.session_state[blank_rows_key],
         autopopulate_previous=autopopulate_previous
     )
 
-    active_players_in_register = len(register_df)
+    active_players_in_register = int(
+        register_df["Name"].fillna("").astype(str).str.strip().ne("").sum()
+    )
+
     attendance_columns = [
         c for c in register_df.columns
         if c.startswith("🟦 Class ")
@@ -515,67 +539,63 @@ with tabs[1]:
             f"Present: {present_count_reg} | Absent: {absent_count_reg}"
         )
 
-    editable_rows = []
-
-    for _, row in register_df.iterrows():
-        editable_rows.append({
-            "__player_id": row["__player_id"],
-            "Delete Permanently": row["Delete Permanently"],
-            "Date Joined": row["Date Joined"],
-            "Name": row["Name"],
-            "Date of Birth": row["Date of Birth"],
-            "Current Age": row["Current Age"],
-            "Venue": row["Venue"],
-            "Status": row["Status"],
-            "Leaving Date": row["Leaving Date"],
-            **{col: row[col] for col in attendance_columns}
-        })
-
-    base_columns = [
-        "Delete Permanently",
-        "Date Joined",
-        "Name",
-        "Date of Birth",
-        "Current Age",
-        "Venue",
-        "Status",
-        "Leaving Date"
-    ]
-
-    all_columns = ["__player_id"] + base_columns + attendance_columns
-    register_df = pd.DataFrame(editable_rows, columns=all_columns)
-
-    column_config = {
-        "__player_id": None,
-        "Delete Permanently": st.column_config.CheckboxColumn("Delete Permanently"),
-        "Date Joined": st.column_config.DateColumn("Date Joined", format="DD-MM-YYYY"),
-        "Name": st.column_config.TextColumn("Name"),
-        "Date of Birth": st.column_config.DateColumn("Date of Birth", format="DD-MM-YYYY"),
-        "Current Age": st.column_config.NumberColumn("Current Age", disabled=True),
-        "Venue": st.column_config.SelectboxColumn("Venue", options=VENUES, disabled=True),
-        "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS),
-        "Leaving Date": st.column_config.DateColumn("Leaving Date", format="DD-MM-YYYY")
-    }
-
-    for col in attendance_columns:
-        column_config[col] = st.column_config.SelectboxColumn(
-            col,
-            options=ATTENDANCE_OPTIONS,
-            help="Blue attendance column: ✓ present, ✕ absent"
-        )
-
-    edited_df = st.data_editor(
-        register_df,
-        use_container_width=True,
-        hide_index=True,
-        height=760,
-        num_rows="dynamic",
-        column_config=column_config,
-        column_order=base_columns + attendance_columns,
-        disabled=["Current Age", "Venue"]
+    attendance_style = JsCode(
+        """
+        function(params) {
+            if (params.value === '✓') {
+                return {'backgroundColor': '#d4edda', 'color': '#155724', 'fontWeight': '600'};
+            }
+            if (params.value === '✕') {
+                return {'backgroundColor': '#f8d7da', 'color': '#721c24', 'fontWeight': '600'};
+            }
+            return {'backgroundColor': '#ffffff'};
+        }
+        """
     )
 
-    save_col, auto_col = st.columns(2)
+    gb = GridOptionsBuilder.from_dataframe(register_df)
+    gb.configure_default_column(editable=False, resizable=True, sortable=False, filter=False)
+
+    gb.configure_column("__player_id", hide=True)
+    gb.configure_column("Delete Permanently", editable=True, width=140, pinned="left")
+    gb.configure_column("Date Joined", editable=True, pinned="left", width=120)
+    gb.configure_column("Name", editable=True, pinned="left", width=180)
+    gb.configure_column("Date of Birth", editable=True, pinned="left", width=120)
+    gb.configure_column("Current Age", editable=False, pinned="left", width=100)
+    gb.configure_column("Venue", editable=False, pinned="left", width=150)
+    gb.configure_column("Status", editable=True, pinned="left", width=110)
+    gb.configure_column("Leaving Date", editable=True, pinned="left", width=120)
+
+    for col in attendance_columns:
+        gb.configure_column(
+            col,
+            editable=True,
+            cellEditor="agSelectCellEditor",
+            cellEditorParams={"values": ATTENDANCE_OPTIONS},
+            cellStyle=attendance_style,
+            width=120
+        )
+
+    grid_options = gb.build()
+
+    grid_response = AgGrid(
+        register_df,
+        grid_options,
+        height=760,
+        update_mode=GridUpdateMode.MODEL_CHANGED,
+        data_return_mode=DataReturnMode.AS_INPUT,
+        fit_columns_on_grid_load=True,
+        allow_unsafe_jscode=True,
+        theme="streamlit",
+        reload_data=True,
+        key=f"attendance_grid_{register_venue}_{register_year}_{register_month}_{int(autopopulate_previous)}"
+    )
+
+    edited_df = grid_response.data
+    if not isinstance(edited_df, pd.DataFrame):
+        edited_df = pd.DataFrame(edited_df)
+
+    save_col, auto_col, add_col = st.columns(3)
 
     with save_col:
         save_clicked = st.button("Save Register", type="primary")
@@ -583,14 +603,18 @@ with tabs[1]:
     with auto_col:
         autopopulate_clicked = st.button("Autopopulate from previous month")
 
+    with add_col:
+        add_rows_clicked = st.button("Add 5 blank rows")
+
     if autopopulate_clicked:
-        st.session_state[current_key] = True
+        st.session_state[autopopulate_key] = True
+        st.rerun()
+
+    if add_rows_clicked:
+        st.session_state[blank_rows_key] += 5
         st.rerun()
 
     if save_clicked:
-        # Refresh the flag after button-driven reruns.
-        autopopulate_previous = st.session_state.get(current_key, False)
-
         for _, row in edited_df.iterrows():
             raw_player_id = row.get("__player_id", None)
             player_name = safe_text(row.get("Name", ""))
@@ -616,6 +640,7 @@ with tabs[1]:
                 joined_date = register_month_start
 
             dob = to_date_value(row.get("Date of Birth"))
+
             status_to_save = safe_text(row.get("Status", "Active")) or "Active"
             if status_to_save not in STATUS_OPTIONS:
                 status_to_save = "Active"
