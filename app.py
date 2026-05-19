@@ -337,6 +337,7 @@ st.caption("Attendance tracker for the playing season from 1 April to 31 March."
 
 tabs = st.tabs(["Summary", "Attendance Register"])
 
+
 with tabs[0]:
     st.header("Summary Dashboard")
 
@@ -480,8 +481,8 @@ with tabs[1]:
     venue_schedule = VENUE_SCHEDULES.get(register_venue, {})
     if venue_schedule:
         st.info(
-            f"Blue labels are attendance fields. Coordinators only need to fill those with ✓ or ✕. "
-            f"Schedule: {venue_schedule['display']}"
+            f"Blue columns are attendance columns. Only those should be filled by coordinators. "
+            f"Use ✓ for present and ✕ for absent. Schedule: {venue_schedule['display']}"
         )
 
     blank_rows_key = f"blank_rows_{register_venue}_{register_year}_{register_month}"
@@ -495,7 +496,7 @@ with tabs[1]:
         st.session_state[show_inactive_key] = False
 
     autopopulate_previous = st.session_state.get(autopopulate_key, False)
-    show_inactive = st.session_state.get(show_inactive_key, False)
+    show_inactive = st.checkbox("Show inactive players", key=show_inactive_key)
 
     top_controls = st.columns(3)
     with top_controls[0]:
@@ -509,19 +510,15 @@ with tabs[1]:
             st.rerun()
 
     with top_controls[2]:
-        st.session_state[show_inactive_key] = st.checkbox(
-            "Show inactive players",
-            value=show_inactive,
-            key=show_inactive_key
-        )
+        st.caption("Use the checkbox above to include Pause/Left players.")
 
     register_df, class_dates, register_month_start, register_month_end, attendance_columns = build_register_rows(
         register_venue,
         register_year,
         register_month,
         blank_rows=st.session_state[blank_rows_key],
-        autopopulate_previous=st.session_state.get(autopopulate_key, False),
-        show_inactive=st.session_state.get(show_inactive_key, False)
+        autopopulate_previous=autopopulate_previous,
+        show_inactive=show_inactive
     )
 
     active_players_in_register = int(
@@ -581,10 +578,7 @@ with tabs[1]:
                 expander_title = "New player"
 
             status_text = row.get("Status", "Active") if row.get("Status", "") else "Active"
-            if is_existing:
-                heading = f"{expander_title} • {status_text}"
-            else:
-                heading = "New player card"
+            heading = f"{expander_title} • {status_text}" if is_existing else "New player card"
 
             with st.expander(heading, expanded=not is_existing):
                 top_a, top_b = st.columns([1.1, 1])
