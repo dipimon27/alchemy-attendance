@@ -315,10 +315,8 @@ def get_monthly_active_player_counts(season_start_year):
 
     results = []
 
-    # April to December
     for month in range(4, 13):
         month_start = date(season_start_year, month, 1)
-
         if month == 12:
             month_end = date(season_start_year, 12, 31)
         else:
@@ -344,11 +342,9 @@ def get_monthly_active_player_counts(season_start_year):
             "active_players": count
         })
 
-    # January to March of next year
     next_year = season_start_year + 1
     for month in range(1, 4):
         month_start = date(next_year, month, 1)
-
         if month == 3:
             month_end = date(next_year, 3, 31)
         else:

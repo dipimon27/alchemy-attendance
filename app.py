@@ -93,16 +93,10 @@ def month_range(year, month):
     return start_date, end_date
 
 
-def get_playing_season_bounds(selected_date):
-    if selected_date.month >= 4:
-        season_start = date(selected_date.year, 4, 1)
-        season_end = date(selected_date.year + 1, 3, 31)
-        season_label = f"{selected_date.year}-{selected_date.year + 1}"
-    else:
-        season_start = date(selected_date.year - 1, 4, 1)
-        season_end = date(selected_date.year, 3, 31)
-        season_label = f"{selected_date.year - 1}-{selected_date.year}"
-    return season_start, season_end, season_label
+def previous_month(year, month):
+    if month == 1:
+        return year - 1, 12
+    return year, month - 1
 
 
 def get_class_dates_for_month(venue, year, month):
@@ -173,6 +167,19 @@ def safe_text(value):
     return str(value).strip()
 
 
+def calculate_age(dob):
+    if dob is None:
+        return None
+
+    today = date.today()
+    years = today.year - dob.year
+
+    if (today.month, today.day) < (dob.month, dob.day):
+        years -= 1
+
+    return years
+
+
 def render_metric_card(label, value, sublabel=None):
     st.markdown(
         f"""
@@ -190,6 +197,113 @@ def render_metric_card(label, value, sublabel=None):
         """,
         unsafe_allow_html=True
     )
+
+
+def get_summary_period(year_start):
+    options = get_season_month_options(year_start)
+    return options
+
+
+def build_register_dataframe(register_venue, register_year, register_month, autopopulate_previous=False):
+    register_month_start, register_month_end = month_range(register_year, register_month)
+    class_dates = get_class_dates_for_month(register_venue, register_year, register_month)
+
+    current_players = db.get_players_for_month(
+        register_venue,
+        register_month_start,
+        register_month_end,
+        include_inactive=False
+    )
+
+    if autopopulate_previous:
+        prev_year, prev_month = previous_month(register_year, register_month)
+        prev_start, prev_end = month_range(prev_year, prev_month)
+
+        previous_players = db.get_players_for_month(
+            register_venue,
+            prev_start,
+            prev_end,
+            include_inactive=True
+        )
+    else:
+        previous_players = []
+
+    attendance_records_month = db.get_attendance_for_venue_month(
+        register_venue,
+        register_month_start,
+        register_month_end
+    )
+
+    attendance_map = {}
+    for record in attendance_records_month:
+        player_id = record[0]
+        saved_date = record[1]
+        saved_status = record[2]
+        attendance_map[(player_id, saved_date)] = db_status_to_ui(saved_status)
+
+    rows_by_id = {}
+
+    def add_row_from_player(player):
+        player_id = player[0]
+        player_name = player[1]
+        dob = to_date_value(player[2])
+        venue = player[3]
+        status = player[4]
+        joining_date = to_date_value(player[5])
+        leaving_date = to_date_value(player[6])
+
+        rows_by_id[player_id] = {
+            "__player_id": player_id,
+            "Delete Permanently": False,
+            "Date Joined": joining_date,
+            "Name": player_name,
+            "Date of Birth": dob,
+            "Current Age": calculate_age(dob),
+            "Venue": venue,
+            "Status": status,
+            "Leaving Date": leaving_date
+        }
+
+    for player in current_players:
+        add_row_from_player(player)
+
+    for player in previous_players:
+        player_id = player[0]
+        if player_id not in rows_by_id:
+            add_row_from_player(player)
+
+    editable_rows = list(rows_by_id.values())
+
+    for row in editable_rows:
+        player_id = row["__player_id"]
+        for class_item in class_dates:
+            class_col = f"🟦 Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
+            row[class_col] = attendance_map.get(
+                (player_id, class_item["class_date"].isoformat()),
+                ""
+            )
+
+    base_columns = [
+        "__player_id",
+        "Delete Permanently",
+        "Date Joined",
+        "Name",
+        "Date of Birth",
+        "Current Age",
+        "Venue",
+        "Status",
+        "Leaving Date"
+    ]
+
+    attendance_columns = [
+        f"🟦 Class {item['class_no']} - {item['class_date'].strftime('%d-%m-%Y')}"
+        for item in class_dates
+    ]
+
+    all_columns = base_columns + attendance_columns
+    register_df = pd.DataFrame(editable_rows, columns=all_columns)
+
+    return register_df, class_dates, register_month_start, register_month_end
 
 
 st.title("Alchemy International Football Academy")
@@ -247,8 +361,8 @@ with tabs[0]:
 
     present_count = 0
     absent_count = 0
-    selected_months_set = set(selected_summary_months)
 
+    selected_months_set = set(selected_summary_months)
     for rec in attendance_records:
         class_date = to_date_value(rec[2])
         if class_date is None:
@@ -355,43 +469,38 @@ with tabs[1]:
             f"Use ✓ for present and ✕ for absent. Schedule: {venue_schedule['display']}"
         )
 
-    class_dates = get_class_dates_for_month(register_venue, register_year, register_month)
+    current_key = f"autopopulate_{register_venue}_{register_year}_{register_month}"
+    autopopulate_previous = st.session_state.get(current_key, False)
 
-    players = db.get_players_for_month(
+    register_df, class_dates, register_month_start, register_month_end = build_register_dataframe(
         register_venue,
-        register_month_start,
-        register_month_end,
-        include_inactive=False
+        register_year,
+        register_month,
+        autopopulate_previous=autopopulate_previous
     )
 
-    attendance_records_month = db.get_attendance_for_venue_month(
-        register_venue,
-        register_month_start,
-        register_month_end
-    )
-
-    attendance_map = {}
-    for record in attendance_records_month:
-        player_id = record[0]
-        saved_date = record[1]
-        saved_status = record[2]
-        attendance_map[(player_id, saved_date)] = db_status_to_ui(saved_status)
-
-    register_cards = st.columns(2)
-    active_players_in_register = sum(1 for p in players if p[4] == "Active")
+    active_players_in_register = len(register_df)
+    attendance_columns = [
+        c for c in register_df.columns
+        if c.startswith("🟦 Class ")
+    ]
 
     present_count_reg = 0
     absent_count_reg = 0
-    for rec in attendance_records_month:
-        if rec[2] == "Present":
-            present_count_reg += 1
-        elif rec[2] == "Absent":
-            absent_count_reg += 1
+
+    for _, row in register_df.iterrows():
+        for col in attendance_columns:
+            val = safe_text(row.get(col, ""))
+            if val == "✓":
+                present_count_reg += 1
+            elif val == "✕":
+                absent_count_reg += 1
 
     register_attendance_rate = 0
     if present_count_reg + absent_count_reg > 0:
         register_attendance_rate = round((present_count_reg / (present_count_reg + absent_count_reg)) * 100, 1)
 
+    register_cards = st.columns(2)
     with register_cards[0]:
         render_metric_card(
             "Active Players",
@@ -407,72 +516,43 @@ with tabs[1]:
         )
 
     editable_rows = []
-    original_rows = {}
 
-    for player in players:
-        player_id = player[0]
-        player_name = player[1]
-        dob = to_date_value(player[2])
-        venue = player[3]
-        status = player[4]
-        joining_date = to_date_value(player[5])
-        leaving_date = to_date_value(player[6])
-
-        original_rows[player_id] = {
-            "Name": player_name,
-            "Date of Birth": dob,
-            "Venue": venue,
-            "Status": status,
-            "Date Joined": joining_date,
-            "Leaving Date": leaving_date
-        }
-
-        row = {
-            "Player ID": player_id,
-            "Delete Permanently": False,
-            "Date Joined": joining_date,
-            "Name": player_name,
-            "Date of Birth": dob,
-            "Venue": venue,
-            "Status": status,
-            "Leaving Date": leaving_date
-        }
-
-        for class_item in class_dates:
-            class_col = f"🟦 Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
-            row[class_col] = attendance_map.get(
-                (player_id, class_item["class_date"].isoformat()),
-                ""
-            )
-
-        editable_rows.append(row)
+    for _, row in register_df.iterrows():
+        editable_rows.append({
+            "__player_id": row["__player_id"],
+            "Delete Permanently": row["Delete Permanently"],
+            "Date Joined": row["Date Joined"],
+            "Name": row["Name"],
+            "Date of Birth": row["Date of Birth"],
+            "Current Age": row["Current Age"],
+            "Venue": row["Venue"],
+            "Status": row["Status"],
+            "Leaving Date": row["Leaving Date"],
+            **{col: row[col] for col in attendance_columns}
+        })
 
     base_columns = [
-        "Player ID",
         "Delete Permanently",
         "Date Joined",
         "Name",
         "Date of Birth",
+        "Current Age",
         "Venue",
         "Status",
         "Leaving Date"
     ]
 
-    attendance_columns = [
-        f"🟦 Class {item['class_no']} - {item['class_date'].strftime('%d-%m-%Y')}"
-        for item in class_dates
-    ]
-
-    all_columns = base_columns + attendance_columns
+    all_columns = ["__player_id"] + base_columns + attendance_columns
     register_df = pd.DataFrame(editable_rows, columns=all_columns)
 
     column_config = {
-        "Player ID": st.column_config.NumberColumn("Player ID", disabled=True),
+        "__player_id": None,
         "Delete Permanently": st.column_config.CheckboxColumn("Delete Permanently"),
         "Date Joined": st.column_config.DateColumn("Date Joined", format="DD-MM-YYYY"),
         "Name": st.column_config.TextColumn("Name"),
         "Date of Birth": st.column_config.DateColumn("Date of Birth", format="DD-MM-YYYY"),
-        "Venue": st.column_config.SelectboxColumn("Venue", options=VENUES),
+        "Current Age": st.column_config.NumberColumn("Current Age", disabled=True),
+        "Venue": st.column_config.SelectboxColumn("Venue", options=VENUES, disabled=True),
         "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS),
         "Leaving Date": st.column_config.DateColumn("Leaving Date", format="DD-MM-YYYY")
     }
@@ -492,12 +572,27 @@ with tabs[1]:
         num_rows="dynamic",
         column_config=column_config,
         column_order=base_columns + attendance_columns,
-        disabled=["Player ID"]
+        disabled=["Current Age", "Venue"]
     )
 
-    if st.button("Save Register", type="primary"):
+    save_col, auto_col = st.columns(2)
+
+    with save_col:
+        save_clicked = st.button("Save Register", type="primary")
+
+    with auto_col:
+        autopopulate_clicked = st.button("Autopopulate from previous month")
+
+    if autopopulate_clicked:
+        st.session_state[current_key] = True
+        st.rerun()
+
+    if save_clicked:
+        # Refresh the flag after button-driven reruns.
+        autopopulate_previous = st.session_state.get(current_key, False)
+
         for _, row in edited_df.iterrows():
-            raw_player_id = row.get("Player ID", None)
+            raw_player_id = row.get("__player_id", None)
             player_name = safe_text(row.get("Name", ""))
 
             existing_player_id = None
@@ -513,25 +608,15 @@ with tabs[1]:
                 db.delete_player_permanently(existing_player_id)
                 continue
 
-            # Skip totally blank new rows
             if existing_player_id is None and player_name == "":
                 continue
 
-            original = original_rows.get(existing_player_id, {}) if existing_player_id is not None else {}
-
             joined_date = to_date_value(row.get("Date Joined"))
             if joined_date is None:
-                joined_date = original.get("Date Joined") or register_month_start
+                joined_date = register_month_start
 
             dob = to_date_value(row.get("Date of Birth"))
-            if dob is None and existing_player_id is not None:
-                dob = original.get("Date of Birth")
-
-            venue_to_save = safe_text(row.get("Venue", register_venue)) or original.get("Venue") or register_venue
-            if venue_to_save not in VENUES:
-                venue_to_save = register_venue
-
-            status_to_save = safe_text(row.get("Status", "Active")) or original.get("Status") or "Active"
+            status_to_save = safe_text(row.get("Status", "Active")) or "Active"
             if status_to_save not in STATUS_OPTIONS:
                 status_to_save = "Active"
 
@@ -540,6 +625,8 @@ with tabs[1]:
                 leaving_date = register_month_end
             if status_to_save != "Left":
                 leaving_date = None
+
+            venue_to_save = register_venue
 
             if existing_player_id is None:
                 player_id_to_use = db.add_player(
@@ -553,7 +640,7 @@ with tabs[1]:
             else:
                 db.update_player(
                     existing_player_id,
-                    player_name if player_name else original.get("Name", ""),
+                    player_name if player_name else "",
                     dob,
                     venue_to_save,
                     status_to_save,
@@ -565,7 +652,6 @@ with tabs[1]:
             for class_item in class_dates:
                 class_col = f"🟦 Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
                 ui_val = safe_text(row.get(class_col, ""))
-
                 db_val = ui_status_to_db(ui_val)
 
                 if db_val == "":
@@ -573,9 +659,9 @@ with tabs[1]:
                 else:
                     db.save_attendance(
                         player_id_to_use,
-                        player_name if player_name else original.get("Name", ""),
+                        player_name,
                         class_item["class_date"].isoformat(),
-                        venue_to_save,
+                        register_venue,
                         db_val
                     )
 
