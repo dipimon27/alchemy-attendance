@@ -6,8 +6,6 @@ import database as db
 
 from datetime import date, timedelta, datetime
 
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode, JsCode
-
 st.set_page_config(
     page_title="Alchemy Football Academy",
     layout="wide"
@@ -182,11 +180,6 @@ def calculate_age(dob):
     return years
 
 
-def format_date_display(value):
-    d = to_date_value(value)
-    return d.strftime("%d-%m-%Y") if d else ""
-
-
 def render_metric_card(label, value, sublabel=None):
     st.markdown(
         f"""
@@ -206,7 +199,24 @@ def render_metric_card(label, value, sublabel=None):
     )
 
 
-def build_register_dataframe(register_venue, register_year, register_month, blank_rows=5, autopopulate_previous=False):
+def get_monthly_summary_period(year_start, selected_summary_months):
+    selected_pairs = get_playing_season_months(year_start)
+    selected_pair_set = set(selected_summary_months)
+    matching_pairs = [(y, m) for (y, m) in selected_pairs if month_label(y, m) in selected_pair_set]
+
+    if matching_pairs:
+        first_y, first_m = matching_pairs[0]
+        last_y, last_m = matching_pairs[-1]
+        summary_period_start = month_range(first_y, first_m)[0]
+        summary_period_end = month_range(last_y, last_m)[1]
+    else:
+        summary_period_start = date(year_start, 4, 1)
+        summary_period_end = date(year_start + 1, 3, 31)
+
+    return summary_period_start, summary_period_end
+
+
+def build_register_rows(register_venue, register_year, register_month, blank_rows=3, autopopulate_previous=False, show_inactive=False):
     register_month_start, register_month_end = month_range(register_year, register_month)
     class_dates = get_class_dates_for_month(register_venue, register_year, register_month)
 
@@ -214,7 +224,7 @@ def build_register_dataframe(register_venue, register_year, register_month, blan
         register_venue,
         register_month_start,
         register_month_end,
-        include_inactive=False
+        include_inactive=show_inactive
     )
 
     previous_players = []
@@ -255,13 +265,13 @@ def build_register_dataframe(register_venue, register_year, register_month, blan
         rows_by_id[player_id] = {
             "__player_id": player_id,
             "Delete Permanently": False,
-            "Date Joined": format_date_display(joining_date),
+            "Date Joined": joining_date,
             "Name": player_name,
-            "Date of Birth": format_date_display(dob),
+            "Date of Birth": dob,
             "Current Age": calculate_age(dob),
             "Venue": venue,
             "Status": status,
-            "Leaving Date": format_date_display(leaving_date)
+            "Leaving Date": leaving_date
         }
 
     for player in current_players:
@@ -278,13 +288,13 @@ def build_register_dataframe(register_venue, register_year, register_month, blan
         editable_rows.append({
             "__player_id": None,
             "Delete Permanently": False,
-            "Date Joined": register_month_start.strftime("%d-%m-%Y"),
+            "Date Joined": register_month_start,
             "Name": "",
-            "Date of Birth": "",
+            "Date of Birth": None,
             "Current Age": None,
             "Venue": register_venue,
             "Status": "Active",
-            "Leaving Date": ""
+            "Leaving Date": None
         })
 
     for row in editable_rows:
@@ -293,7 +303,7 @@ def build_register_dataframe(register_venue, register_year, register_month, blan
             continue
 
         for class_item in class_dates:
-            class_col = f"🟦 Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
+            class_col = f"Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
             row[class_col] = attendance_map.get(
                 (player_id, class_item["class_date"].isoformat()),
                 ""
@@ -312,21 +322,20 @@ def build_register_dataframe(register_venue, register_year, register_month, blan
     ]
 
     attendance_columns = [
-        f"🟦 Class {item['class_no']} - {item['class_date'].strftime('%d-%m-%Y')}"
+        f"Class {item['class_no']} - {item['class_date'].strftime('%d-%m-%Y')}"
         for item in class_dates
     ]
 
     all_columns = base_columns + attendance_columns
     register_df = pd.DataFrame(editable_rows, columns=all_columns)
 
-    return register_df, class_dates, register_month_start, register_month_end
+    return register_df, class_dates, register_month_start, register_month_end, attendance_columns
 
 
 st.title("Alchemy International Football Academy")
 st.caption("Attendance tracker for the playing season from 1 April to 31 March.")
 
 tabs = st.tabs(["Summary", "Attendance Register"])
-
 
 with tabs[0]:
     st.header("Summary Dashboard")
@@ -352,19 +361,10 @@ with tabs[0]:
             default=summary_month_options
         )
 
-    selected_pairs = get_playing_season_months(summary_season_start_year)
-    selected_pair_set = set(selected_summary_months)
-
-    matching_pairs = [(y, m) for (y, m) in selected_pairs if month_label(y, m) in selected_pair_set]
-
-    if matching_pairs:
-        first_y, first_m = matching_pairs[0]
-        last_y, last_m = matching_pairs[-1]
-        summary_period_start = month_range(first_y, first_m)[0]
-        summary_period_end = month_range(last_y, last_m)[1]
-    else:
-        summary_period_start = date(summary_season_start_year, 4, 1)
-        summary_period_end = date(summary_season_start_year + 1, 3, 31)
+    summary_period_start, summary_period_end = get_monthly_summary_period(
+        summary_season_start_year,
+        selected_summary_months
+    )
 
     with summary_right:
         st.info(
@@ -480,34 +480,53 @@ with tabs[1]:
     venue_schedule = VENUE_SCHEDULES.get(register_venue, {})
     if venue_schedule:
         st.info(
-            f"Blue columns are attendance columns. Only those should be filled by coordinators. "
-            f"Use ✓ for present and ✕ for absent. Schedule: {venue_schedule['display']}"
+            f"Blue labels are attendance fields. Coordinators only need to fill those with ✓ or ✕. "
+            f"Schedule: {venue_schedule['display']}"
         )
 
     blank_rows_key = f"blank_rows_{register_venue}_{register_year}_{register_month}"
     autopopulate_key = f"autopopulate_{register_venue}_{register_year}_{register_month}"
+    show_inactive_key = f"show_inactive_{register_venue}_{register_year}_{register_month}"
 
     if blank_rows_key not in st.session_state:
-        st.session_state[blank_rows_key] = 5
+        st.session_state[blank_rows_key] = 3
+
+    if show_inactive_key not in st.session_state:
+        st.session_state[show_inactive_key] = False
 
     autopopulate_previous = st.session_state.get(autopopulate_key, False)
+    show_inactive = st.session_state.get(show_inactive_key, False)
 
-    register_df, class_dates, register_month_start, register_month_end = build_register_dataframe(
+    top_controls = st.columns(3)
+    with top_controls[0]:
+        if st.button("Add blank player card"):
+            st.session_state[blank_rows_key] += 1
+            st.rerun()
+
+    with top_controls[1]:
+        if st.button("Autopopulate previous month"):
+            st.session_state[autopopulate_key] = True
+            st.rerun()
+
+    with top_controls[2]:
+        st.session_state[show_inactive_key] = st.checkbox(
+            "Show inactive players",
+            value=show_inactive,
+            key=show_inactive_key
+        )
+
+    register_df, class_dates, register_month_start, register_month_end, attendance_columns = build_register_rows(
         register_venue,
         register_year,
         register_month,
         blank_rows=st.session_state[blank_rows_key],
-        autopopulate_previous=autopopulate_previous
+        autopopulate_previous=st.session_state.get(autopopulate_key, False),
+        show_inactive=st.session_state.get(show_inactive_key, False)
     )
 
     active_players_in_register = int(
         register_df["Name"].fillna("").astype(str).str.strip().ne("").sum()
     )
-
-    attendance_columns = [
-        c for c in register_df.columns
-        if c.startswith("🟦 Class ")
-    ]
 
     present_count_reg = 0
     absent_count_reg = 0
@@ -539,83 +558,113 @@ with tabs[1]:
             f"Present: {present_count_reg} | Absent: {absent_count_reg}"
         )
 
-    attendance_style = JsCode(
-        """
-        function(params) {
-            if (params.value === '✓') {
-                return {'backgroundColor': '#d4edda', 'color': '#155724', 'fontWeight': '600'};
-            }
-            if (params.value === '✕') {
-                return {'backgroundColor': '#f8d7da', 'color': '#721c24', 'fontWeight': '600'};
-            }
-            return {'backgroundColor': '#ffffff'};
-        }
-        """
-    )
+    edited_rows = []
 
-    gb = GridOptionsBuilder.from_dataframe(register_df)
-    gb.configure_default_column(editable=False, resizable=True, sortable=False, filter=False)
+    with st.form("mobile_register_form"):
+        st.markdown("### Players")
+        st.caption("Open a player card, make edits, then click Save Register at the bottom.")
 
-    gb.configure_column("__player_id", hide=True)
-    gb.configure_column("Delete Permanently", editable=True, width=140, pinned="left")
-    gb.configure_column("Date Joined", editable=True, pinned="left", width=120)
-    gb.configure_column("Name", editable=True, pinned="left", width=180)
-    gb.configure_column("Date of Birth", editable=True, pinned="left", width=120)
-    gb.configure_column("Current Age", editable=False, pinned="left", width=100)
-    gb.configure_column("Venue", editable=False, pinned="left", width=150)
-    gb.configure_column("Status", editable=True, pinned="left", width=110)
-    gb.configure_column("Leaving Date", editable=True, pinned="left", width=120)
+        for idx, row in register_df.iterrows():
+            raw_player_id = row.get("__player_id", None)
+            is_existing = raw_player_id is not None and not pd.isna(raw_player_id)
 
-    for col in attendance_columns:
-        gb.configure_column(
-            col,
-            editable=True,
-            cellEditor="agSelectCellEditor",
-            cellEditorParams={"values": ATTENDANCE_OPTIONS},
-            cellStyle=attendance_style,
-            width=120
-        )
+            if is_existing:
+                try:
+                    player_id_key = int(raw_player_id)
+                except Exception:
+                    player_id_key = f"existing_{idx}"
+            else:
+                player_id_key = f"new_{idx}"
 
-    grid_options = gb.build()
+            expander_title = row.get("Name", "").strip()
+            if expander_title == "":
+                expander_title = "New player"
 
-    grid_response = AgGrid(
-        register_df,
-        grid_options,
-        height=760,
-        update_mode=GridUpdateMode.MODEL_CHANGED,
-        data_return_mode=DataReturnMode.AS_INPUT,
-        fit_columns_on_grid_load=True,
-        allow_unsafe_jscode=True,
-        theme="streamlit",
-        reload_data=True,
-        key=f"attendance_grid_{register_venue}_{register_year}_{register_month}_{int(autopopulate_previous)}"
-    )
+            status_text = row.get("Status", "Active") if row.get("Status", "") else "Active"
+            if is_existing:
+                heading = f"{expander_title} • {status_text}"
+            else:
+                heading = "New player card"
 
-    edited_df = grid_response.data
-    if not isinstance(edited_df, pd.DataFrame):
-        edited_df = pd.DataFrame(edited_df)
+            with st.expander(heading, expanded=not is_existing):
+                top_a, top_b = st.columns([1.1, 1])
 
-    save_col, auto_col, add_col = st.columns(3)
+                delete_flag = top_a.checkbox(
+                    "Delete Permanently",
+                    value=bool(row.get("Delete Permanently", False)),
+                    key=f"{player_id_key}_delete"
+                )
 
-    with save_col:
-        save_clicked = st.button("Save Register", type="primary")
+                joined_date = top_a.date_input(
+                    "Date Joined",
+                    value=to_date_value(row.get("Date Joined")) or register_month_start,
+                    key=f"{player_id_key}_joined"
+                )
 
-    with auto_col:
-        autopopulate_clicked = st.button("Autopopulate from previous month")
+                name_value = top_a.text_input(
+                    "Name",
+                    value=safe_text(row.get("Name", "")),
+                    key=f"{player_id_key}_name"
+                )
 
-    with add_col:
-        add_rows_clicked = st.button("Add 5 blank rows")
+                dob_value = top_b.date_input(
+                    "Date of Birth",
+                    value=to_date_value(row.get("Date of Birth")) or date.today(),
+                    key=f"{player_id_key}_dob"
+                )
 
-    if autopopulate_clicked:
-        st.session_state[autopopulate_key] = True
-        st.rerun()
+                status_value = top_b.selectbox(
+                    "Status",
+                    STATUS_OPTIONS,
+                    index=STATUS_OPTIONS.index(row.get("Status", "Active")) if row.get("Status", "Active") in STATUS_OPTIONS else 0,
+                    key=f"{player_id_key}_status"
+                )
 
-    if add_rows_clicked:
-        st.session_state[blank_rows_key] += 5
-        st.rerun()
+                leaving_value = top_b.date_input(
+                    "Leaving Date",
+                    value=to_date_value(row.get("Leaving Date")) or register_month_end,
+                    key=f"{player_id_key}_leaving"
+                )
+
+                current_age = calculate_age(dob_value)
+                st.caption(f"Current Age: {current_age if current_age is not None else '-'}")
+
+                st.markdown("#### Attendance for this month")
+                st.caption("Fill only the blue attendance fields with ✓ for present or ✕ for absent.")
+
+                attendance_values = {}
+                for class_item in class_dates:
+                    label_col, value_col = st.columns([4, 1])
+                    class_label = f"Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
+                    with label_col:
+                        st.markdown(
+                            f"<span style='color:#1f77b4; font-weight:600;'>{class_label}</span>",
+                            unsafe_allow_html=True
+                        )
+                    with value_col:
+                        attendance_values[class_label] = st.selectbox(
+                            " ",
+                            ATTENDANCE_OPTIONS,
+                            index=ATTENDANCE_OPTIONS.index(row.get(class_label, "")) if row.get(class_label, "") in ATTENDANCE_OPTIONS else 0,
+                            key=f"{player_id_key}_att_{class_item['class_no']}",
+                            label_visibility="collapsed"
+                        )
+
+                edited_rows.append({
+                    "__player_id": raw_player_id,
+                    "Delete Permanently": delete_flag,
+                    "Date Joined": joined_date,
+                    "Name": name_value,
+                    "Date of Birth": dob_value,
+                    "Status": status_value,
+                    "Leaving Date": leaving_value,
+                    **attendance_values
+                })
+
+        save_clicked = st.form_submit_button("Save Register", type="primary")
 
     if save_clicked:
-        for _, row in edited_df.iterrows():
+        for row in edited_rows:
             raw_player_id = row.get("__player_id", None)
             player_name = safe_text(row.get("Name", ""))
 
@@ -675,8 +724,8 @@ with tabs[1]:
                 player_id_to_use = existing_player_id
 
             for class_item in class_dates:
-                class_col = f"🟦 Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
-                ui_val = safe_text(row.get(class_col, ""))
+                class_label = f"Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
+                ui_val = safe_text(row.get(class_label, ""))
                 db_val = ui_status_to_db(ui_val)
 
                 if db_val == "":
