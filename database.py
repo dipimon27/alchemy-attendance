@@ -40,14 +40,7 @@ def create_tables():
     conn.close()
 
 
-def add_player(
-    player_name,
-    dob,
-    venue,
-    status,
-    joining_date,
-    leaving_date=None
-):
+def add_player(player_name, dob, venue, status, joining_date, leaving_date=None):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -76,15 +69,7 @@ def add_player(
     return player_id
 
 
-def update_player(
-    player_id,
-    player_name,
-    dob,
-    venue,
-    status,
-    joining_date,
-    leaving_date=None
-):
+def update_player(player_id, player_name, dob, venue, status, joining_date, leaving_date=None):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -144,14 +129,9 @@ def get_players_for_month(venue, month_start, month_end, include_inactive=False)
                 leaving_date
             FROM players
             WHERE venue = ?
-              AND date(joining_date) <= date(?)
-              AND (
-                    leaving_date IS NULL
-                    OR date(leaving_date) >= date(?)
-              )
             ORDER BY status, player_name
         """
-        params = (venue, month_end.isoformat(), month_start.isoformat())
+        params = (venue,)
     else:
         query = """
             SELECT
@@ -178,45 +158,37 @@ def get_players_for_month(venue, month_start, month_end, include_inactive=False)
     conn.close()
     return players
 
-    if include_inactive:
-        query = """
-            SELECT
-                id,
-                player_name,
-                dob,
-                venue,
-                status,
-                joining_date,
-                leaving_date
-            FROM players
-            WHERE venue = ?
-            ORDER BY status, player_name
-        """
-        params = (venue,)
-    else:
-        query = """
-            SELECT
-                id,
-                player_name,
-                dob,
-                venue,
-                status,
-                joining_date,
-                leaving_date
-            FROM players
-            WHERE venue = ?
-              AND date(joining_date) <= date(?)
-              AND (
-                    leaving_date IS NULL
-                    OR date(leaving_date) >= date(?)
-              )
-            ORDER BY status, player_name
-        """
-        params = (venue, month_end.isoformat(), month_start.isoformat())
 
-    players = conn.execute(query, params).fetchall()
+def get_players_for_class(venue, class_date):
+    conn = get_connection()
+
+    query = """
+        SELECT
+            id,
+            player_name,
+            dob,
+            venue,
+            status,
+            joining_date,
+            leaving_date
+        FROM players
+        WHERE venue = ?
+          AND status = 'Active'
+          AND date(joining_date) <= date(?)
+          AND (
+                leaving_date IS NULL
+                OR date(leaving_date) >= date(?)
+          )
+        ORDER BY player_name
+    """
+
+    records = conn.execute(
+        query,
+        (venue, class_date.isoformat(), class_date.isoformat())
+    ).fetchall()
+
     conn.close()
-    return players
+    return records
 
 
 def save_attendance(player_id, player_name, class_date, venue, attendance_status):
@@ -262,6 +234,27 @@ def delete_attendance(player_id, class_date):
 
     conn.commit()
     conn.close()
+
+
+def get_attendance_for_class(venue, class_date):
+    conn = get_connection()
+
+    query = """
+        SELECT
+            player_id,
+            attendance_status
+        FROM attendance
+        WHERE venue = ?
+          AND class_date = ?
+    """
+
+    records = conn.execute(
+        query,
+        (venue, class_date.isoformat())
+    ).fetchall()
+
+    conn.close()
+    return records
 
 
 def get_attendance_for_venue_month(venue, month_start, month_end):

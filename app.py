@@ -304,12 +304,12 @@ tabs = st.tabs(["Summary", "Admin Review Sheet", "Coordinator Register"])
 with tabs[0]:
     st.header("Summary Dashboard")
 
-    left, mid, right = st.columns([1, 1.5, 1])
+    summary_left, summary_mid, summary_right = st.columns([1, 1.5, 1])
 
     summary_year_options = list(range(date.today().year - 2, date.today().year + 3))
     default_summary_year = date.today().year if date.today().month >= 4 else date.today().year - 1
 
-    with left:
+    with summary_left:
         summary_season_start_year = st.selectbox(
             "Season start year",
             summary_year_options,
@@ -319,7 +319,7 @@ with tabs[0]:
 
     summary_month_options = get_season_month_options(summary_season_start_year)
 
-    with mid:
+    with summary_mid:
         selected_summary_months = st.multiselect(
             "Months",
             summary_month_options,
@@ -332,7 +332,7 @@ with tabs[0]:
         selected_summary_months
     )
 
-    with right:
+    with summary_right:
         st.info(
             f"Summary period: {summary_period_start.strftime('%d-%m-%Y')} to {summary_period_end.strftime('%d-%m-%Y')}"
         )
@@ -413,12 +413,12 @@ with tabs[0]:
 with tabs[1]:
     st.header("Admin Review Sheet")
 
-    c1, c2, c3 = st.columns(3)
+    admin_left, admin_mid, admin_right = st.columns(3)
 
-    with c1:
+    with admin_left:
         admin_venue = st.selectbox("Venue", VENUES, key="admin_venue")
 
-    with c2:
+    with admin_mid:
         admin_year = st.selectbox(
             "Year",
             list(range(date.today().year - 2, date.today().year + 3)),
@@ -426,7 +426,7 @@ with tabs[1]:
             key="admin_year"
         )
 
-    with c3:
+    with admin_right:
         admin_month = st.selectbox(
             "Month",
             list(range(1, 13)),
@@ -548,7 +548,7 @@ with tabs[1]:
             help="✓ = Present, ✕ = Absent"
         )
 
-    st.caption("Edit master details here. Attendance changes made in this sheet will also appear in the coordinator register.")
+    st.caption("Edit master details here. Attendance changes made here will mirror in the coordinator register.")
 
     edited_master_df = st.data_editor(
         register_df,
@@ -644,12 +644,12 @@ with tabs[1]:
 with tabs[2]:
     st.header("Coordinator Register")
 
-    c1, c2, c3 = st.columns(3)
+    coord_left, coord_mid, coord_right = st.columns(3)
 
-    with c1:
+    with coord_left:
         coord_venue = st.selectbox("Venue", VENUES, key="coord_venue")
 
-    with c2:
+    with coord_mid:
         coord_year = st.selectbox(
             "Year",
             list(range(date.today().year - 2, date.today().year + 3)),
@@ -657,7 +657,7 @@ with tabs[2]:
             key="coord_year"
         )
 
-    with c3:
+    with coord_right:
         coord_month = st.selectbox(
             "Month",
             list(range(1, 13)),
@@ -676,98 +676,97 @@ with tabs[2]:
 
     if coord_venue in VENUE_SCHEDULES:
         st.info(
-            f"Use this view on mobile. Select one player and mark only attendance. "
+            f"Use this view on mobile. Pick one class date, then mark players present or absent. "
             f"Schedule: {VENUE_SCHEDULES[coord_venue]['display']}"
         )
 
-    players_for_month = db.get_players_for_month(
-        coord_venue,
-        coord_month_start,
-        coord_month_end,
-        include_inactive=False
-    )
-
-    if not players_for_month:
-        st.warning("No active players found for this venue/month.")
+    if not coord_class_dates:
+        st.warning("No class dates found for this venue and month.")
     else:
-        player_map = {p[1]: p for p in players_for_month}
-        player_names = list(player_map.keys())
+        class_options = {
+            f"Class {item['class_no']} - {item['class_date'].strftime('%d-%m-%Y')}": item["class_date"]
+            for item in coord_class_dates
+        }
 
-        selected_player_name = st.selectbox(
-            "Player",
-            player_names,
-            key="coord_player_name"
+        selected_class_label = st.selectbox(
+            "Class date",
+            list(class_options.keys()),
+            key="coord_class_date"
         )
 
-        selected_player = player_map[selected_player_name]
-        selected_player_id = selected_player[0]
-        selected_player_dob = to_date_value(selected_player[2])
-        selected_player_status = selected_player[4]
-        selected_player_joined = to_date_value(selected_player[5])
-        selected_player_leaving = to_date_value(selected_player[6])
+        selected_class_date = class_options[selected_class_label]
 
-        attendance_records_month = db.get_attendance_for_venue_month(
+        players_for_class = db.get_players_for_class(
             coord_venue,
-            coord_month_start,
-            coord_month_end
+            selected_class_date
         )
 
-        player_attendance_map = {}
-        for record in attendance_records_month:
-            if int(record[0]) == int(selected_player_id):
-                player_attendance_map[record[1]] = db_status_to_ui(record[2])
+        if not players_for_class:
+            st.warning("No active players found for this class date.")
+        else:
+            existing_attendance = db.get_attendance_for_class(
+                coord_venue,
+                selected_class_date
+            )
 
-        st.markdown("### Player Snapshot")
-        snap1, snap2 = st.columns(2)
-        with snap1:
-            st.write(f"**Date Joined:** {selected_player_joined.strftime('%d-%m-%Y') if selected_player_joined else '-'}")
-            st.write(f"**Date of Birth:** {selected_player_dob.strftime('%d-%m-%Y') if selected_player_dob else '-'}")
-        with snap2:
-            st.write(f"**Current Age:** {calculate_age(selected_player_dob) if selected_player_dob else '-'}")
-            st.write(f"**Status:** {selected_player_status}")
+            attendance_map = {
+                int(row[0]): db_status_to_ui(row[1])
+                for row in existing_attendance
+            }
 
-        with st.form("coordinator_form"):
-            st.markdown("### Mark Attendance")
-            st.caption("✓ = Present, ✕ = Absent")
+            st.markdown("### Players for selected class")
+            st.caption("Mark each player with ✓ for present or ✕ for absent.")
 
-            attendance_values = {}
-            for class_item in coord_class_dates:
-                class_label = f"{class_item['class_no']}. {class_item['class_date'].strftime('%d-%m-%Y')}"
-                current_value = player_attendance_map.get(class_item["class_date"].isoformat(), "")
+            with st.form("coordinator_class_form"):
+                attendance_values = {}
 
-                row_left, row_right = st.columns([4, 1])
-                with row_left:
-                    st.markdown(
-                        f"<span style='color:#1f77b4; font-weight:600;'>{class_label}</span>",
-                        unsafe_allow_html=True
-                    )
-                with row_right:
-                    attendance_values[class_item["class_date"].isoformat()] = st.selectbox(
-                        " ",
-                        ATTENDANCE_OPTIONS,
-                        index=ATTENDANCE_OPTIONS.index(current_value) if current_value in ATTENDANCE_OPTIONS else 0,
-                        key=f"coord_att_{selected_player_id}_{class_item['class_no']}",
-                        label_visibility="collapsed"
-                    )
+                for player in players_for_class:
+                    player_id = int(player[0])
+                    player_name = player[1]
+                    dob = to_date_value(player[2])
+                    status = player[4]
+                    joined_date = to_date_value(player[5])
 
-            save_attendance_clicked = st.form_submit_button("Save Attendance", type="primary")
+                    current_value = attendance_map.get(player_id, "")
 
-        if save_attendance_clicked:
-            for class_item in coord_class_dates:
-                class_date_iso = class_item["class_date"].isoformat()
-                ui_val = attendance_values.get(class_date_iso, "")
-                db_val = ui_status_to_db(ui_val)
+                    row_left, row_right = st.columns([4, 1])
+                    with row_left:
+                        st.markdown(f"**{player_name}**")
+                        st.caption(
+                            f"Joined: {joined_date.strftime('%d-%m-%Y') if joined_date else '-'} | "
+                            f"DOB: {dob.strftime('%d-%m-%Y') if dob else '-'} | "
+                            f"Status: {status}"
+                        )
 
-                if db_val == "":
-                    db.delete_attendance(selected_player_id, class_date_iso)
-                else:
-                    db.save_attendance(
-                        selected_player_id,
-                        selected_player_name,
-                        class_date_iso,
-                        coord_venue,
-                        db_val
-                    )
+                    with row_right:
+                        attendance_values[player_id] = st.selectbox(
+                            "Attendance",
+                            ATTENDANCE_OPTIONS,
+                            index=ATTENDANCE_OPTIONS.index(current_value) if current_value in ATTENDANCE_OPTIONS else 0,
+                            key=f"coord_att_{player_id}_{selected_class_date.isoformat()}",
+                            label_visibility="collapsed"
+                        )
 
-            st.success(f"Attendance saved for {selected_player_name}")
-            st.rerun()
+                save_clicked = st.form_submit_button("Save Attendance", type="primary")
+
+            if save_clicked:
+                for player in players_for_class:
+                    player_id = int(player[0])
+                    player_name = player[1]
+
+                    ui_val = attendance_values.get(player_id, "")
+                    db_val = ui_status_to_db(ui_val)
+
+                    if db_val == "":
+                        db.delete_attendance(player_id, selected_class_date.isoformat())
+                    else:
+                        db.save_attendance(
+                            player_id,
+                            player_name,
+                            selected_class_date.isoformat(),
+                            coord_venue,
+                            db_val
+                        )
+
+                st.success(f"Attendance saved for {selected_class_label}")
+                st.rerun()
