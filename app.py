@@ -19,7 +19,7 @@ VENUES = [
     "ECC",
     "Match Point",
     "CSE",
-    "Powerplay Weekend",
+    "Powerplay Seniors",
     "Powerplay Juniors"
 ]
 
@@ -56,7 +56,7 @@ VENUE_SCHEDULES = {
         "days": [5, 6],
         "display": "Sat, Sun | 4:00 PM - 5:30 PM"
     },
-    "Powerplay Weekend": {
+    "Powerplay Seniors": {
         "days": [5, 6],
         "display": "Sat 4:00 PM - 5:30 PM | Sun 10:00 AM - 11:30 AM"
     },
@@ -242,14 +242,16 @@ def build_admin_register(admin_venue, admin_year, admin_month, show_inactive=Fal
         player_name = player[1]
         dob = to_date_value(player[2])
         venue = player[3]
-        status = player[4]
-        joining_date = to_date_value(player[5])
-        leaving_date = to_date_value(player[6])
+        fees_paid = player[4]
+        status = player[5]
+        joining_date = to_date_value(player[6])
+        leaving_date = to_date_value(player[7])
 
         original_rows[player_id] = {
             "Name": player_name,
             "Date of Birth": dob,
             "Venue": venue,
+            "Fees Paid": fees_paid,
             "Status": status,
             "Date Joined": joining_date,
             "Leaving Date": leaving_date,
@@ -262,8 +264,8 @@ def build_admin_register(admin_venue, admin_year, admin_month, show_inactive=Fal
             "Date of Birth": dob,
             "Current Age": calculate_age(dob),
             "Venue": venue,
+            "Fees Paid": fees_paid,
             "Status": status,
-            "Leaving Date": leaving_date,
         }
 
         for class_item in class_dates:
@@ -275,6 +277,24 @@ def build_admin_register(admin_venue, admin_year, admin_month, show_inactive=Fal
 
         rows.append(row)
 
+    # blank row for adding a new player
+    blank_row = {
+        "__player_id": None,
+        "Date Joined": month_start,
+        "Name": "",
+        "Date of Birth": None,
+        "Current Age": None,
+        "Venue": admin_venue,
+        "Fees Paid": "",
+        "Status": "Active",
+    }
+
+    for class_item in class_dates:
+        class_col = f"Class {class_item['class_no']} - {class_item['class_date'].strftime('%d-%m-%Y')}"
+        blank_row[class_col] = ""
+
+    rows.append(blank_row)
+
     base_columns = [
         "__player_id",
         "Date Joined",
@@ -282,8 +302,8 @@ def build_admin_register(admin_venue, admin_year, admin_month, show_inactive=Fal
         "Date of Birth",
         "Current Age",
         "Venue",
+        "Fees Paid",
         "Status",
-        "Leaving Date",
     ]
 
     attendance_columns = [
@@ -449,18 +469,30 @@ with tabs[1]:
 
     st.markdown("#### Add player")
     with st.form("add_player_form"):
-        add_cols = st.columns(4)
+        add_cols = st.columns(6)
 
         with add_cols[0]:
             new_name = st.text_input("Name")
         with add_cols[1]:
-            new_dob = st.date_input("Date of Birth", value=date.today())
+            new_dob = st.date_input(
+                "Date of Birth",
+                value=date(2016, 1, 1),
+                min_value=date(2000, 1, 1),
+                max_value=date.today()
+            )
         with add_cols[2]:
-            new_joined = st.date_input("Date Joined", value=admin_month_start)
+            new_joined = st.date_input(
+                "Date Joined",
+                value=admin_month_start,
+                min_value=date(2000, 1, 1),
+                max_value=date.today()
+            )
         with add_cols[3]:
+            new_venue = st.selectbox("Venue", VENUES, index=VENUES.index(admin_venue))
+        with add_cols[4]:
+            new_fees_paid = st.text_input("Fees Paid")
+        with add_cols[5]:
             new_status = st.selectbox("Status", STATUS_OPTIONS, index=0)
-
-        new_venue = st.selectbox("Venue", VENUES, index=VENUES.index(admin_venue))
 
         add_submit = st.form_submit_button("Add Player")
 
@@ -476,6 +508,7 @@ with tabs[1]:
                     new_name.strip(),
                     new_dob,
                     new_venue,
+                    new_fees_paid,
                     new_status,
                     new_joined,
                     leaving_date
@@ -526,19 +559,29 @@ with tabs[1]:
         "Date of Birth",
         "Current Age",
         "Venue",
+        "Fees Paid",
         "Status",
-        "Leaving Date",
     ]
 
     column_config = {
         "__player_id": None,
-        "Date Joined": st.column_config.DateColumn("Date Joined", format="DD-MM-YYYY"),
+        "Date Joined": st.column_config.DateColumn(
+            "Date Joined",
+            format="DD-MM-YYYY",
+            min_value=date(2000, 1, 1),
+            max_value=date.today()
+        ),
         "Name": st.column_config.TextColumn("Name"),
-        "Date of Birth": st.column_config.DateColumn("Date of Birth", format="DD-MM-YYYY"),
+        "Date of Birth": st.column_config.DateColumn(
+            "Date of Birth",
+            format="DD-MM-YYYY",
+            min_value=date(2000, 1, 1),
+            max_value=date.today()
+        ),
         "Current Age": st.column_config.NumberColumn("Current Age", disabled=True),
         "Venue": st.column_config.SelectboxColumn("Venue", options=VENUES),
+        "Fees Paid": st.column_config.TextColumn("Fees Paid"),
         "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS),
-        "Leaving Date": st.column_config.DateColumn("Leaving Date", format="DD-MM-YYYY"),
     }
 
     for col in attendance_columns:
@@ -590,14 +633,18 @@ with tabs[1]:
             if venue_to_save not in VENUES:
                 venue_to_save = admin_venue
 
+            fees_paid_to_save = safe_text(row.get("Fees Paid", ""))
+            if fees_paid_to_save == "" and existing_player_id is not None:
+                fees_paid_to_save = safe_text(original.get("Fees Paid", ""))
+
             status_to_save = safe_text(row.get("Status", "Active")) or original.get("Status") or "Active"
             if status_to_save not in STATUS_OPTIONS:
                 status_to_save = "Active"
 
-            leaving_date = to_date_value(row.get("Leaving Date"))
-            if status_to_save == "Left" and leaving_date is None:
+            leaving_date = original.get("Leaving Date")
+            if status_to_save == "Left":
                 leaving_date = admin_month_end
-            if status_to_save != "Left":
+            else:
                 leaving_date = None
 
             if existing_player_id is None:
@@ -605,6 +652,7 @@ with tabs[1]:
                     player_name,
                     dob,
                     venue_to_save,
+                    fees_paid_to_save,
                     status_to_save,
                     joined_date,
                     leaving_date
@@ -615,6 +663,7 @@ with tabs[1]:
                     player_name if player_name else original.get("Name", ""),
                     dob,
                     venue_to_save,
+                    fees_paid_to_save,
                     status_to_save,
                     joined_date,
                     leaving_date
@@ -724,8 +773,9 @@ with tabs[2]:
                     player_id = int(player[0])
                     player_name = player[1]
                     dob = to_date_value(player[2])
-                    status = player[4]
-                    joined_date = to_date_value(player[5])
+                    fees_paid = safe_text(player[4])
+                    status = player[5]
+                    joined_date = to_date_value(player[6])
 
                     current_value = attendance_map.get(player_id, "")
 
@@ -735,6 +785,7 @@ with tabs[2]:
                         st.caption(
                             f"Joined: {joined_date.strftime('%d-%m-%Y') if joined_date else '-'} | "
                             f"DOB: {dob.strftime('%d-%m-%Y') if dob else '-'} | "
+                            f"Fees Paid: {fees_paid or '-'} | "
                             f"Status: {status}"
                         )
 
